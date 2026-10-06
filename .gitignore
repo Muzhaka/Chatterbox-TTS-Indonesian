@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.env
+
+# Model weights (auto-downloaded from grandhigh/Chatterbox-TTS-Indonesian)
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Generated audio outputs
+tts_outputs/
+output_clone/
+base_clone/
+profile_model/
+logs/
+
+# Test files
+test_id.wav
+*.wav
+*.mp3
+*.flac
+
+# User profiles (auto-created)
+voice_profiles.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

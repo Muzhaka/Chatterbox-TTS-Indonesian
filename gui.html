@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<title>Chatterbox TTS Indonesian</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+body{background:#12121f;color:#e2e8f0;padding:18px;font-size:14px}
+.container{max-width:720px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.header{display:flex;justify-content:space-between;align-items:center;padding-bottom:8px;border-bottom:1px solid #232338}
+.header h1{font-size:1.25rem;font-weight:700;color:#f8fafc}
+.header-sub{font-size:.75rem;color:#718096}
+.header-actions{display:flex;align-items:center;gap:8px}
+.tabs{display:flex;gap:6px;background:#1a1a2e;padding:4px;border-radius:8px;border:1px solid #27273f}
+.tab-btn{flex:1;padding:8px 14px;border-radius:6px;background:transparent;border:none;color:#8892b0;font-weight:600;cursor:pointer;font-size:.88rem}
+.tab-btn.active{background:#6366f1;color:#fff;box-shadow:0 2px 8px rgba(99,102,241,.35)}
+.tab-btn:hover:not(.active){background:#252542;color:#cbd5e1}
+.card{background:#1a1a2e;border:1px solid #27273f;border-radius:8px;padding:14px;display:flex;flex-direction:column;gap:10px}
+.card-title{font-weight:600;font-size:.88rem;color:#cbd5e1;display:flex;align-items:center;justify-content:space-between}
+.status{padding:8px 12px;border-radius:6px;font-size:.8rem;display:flex;align-items:center;gap:8px}
+.status.ok{background:#064e3b;color:#34d399;border:1px solid #059669}
+.status.loading{background:#1e293b;color:#94a3b8;border:1px solid #334155}
+.status.error{background:#450a0a;color:#f87171;border:1px solid #b91c1c}
+.spinner{width:12px;height:12px;border:2px solid #94a3b8;border-top-color:transparent;border-radius:50%;display:inline-block;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+label{font-size:.78rem;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em}
+textarea{width:100%;min-height:90px;background:#111122;color:#f8fafc;border:1px solid #2d2d48;border-radius:6px;padding:10px;font-size:.9rem;resize:vertical;outline:none}
+textarea:focus{border-color:#6366f1}
+select,input[type="text"],input[type="number"]{width:100%;background:#111122;color:#f8fafc;border:1px solid #2d2d48;border-radius:6px;padding:8px 10px;font-size:.85rem;outline:none}
+select:focus,input:focus{border-color:#6366f1}
+.btn{padding:8px 14px;border-radius:6px;border:none;font-weight:600;font-size:.83rem;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:#6366f1;color:#fff}
+.btn-primary:hover:not(:disabled){background:#4f46e5}
+.btn-secondary{background:#27273f;color:#cbd5e1}
+.btn-secondary:hover:not(:disabled){background:#333355}
+.btn-danger-outline{background:transparent;border:1px solid #ef4444;color:#ef4444}
+.btn-danger-outline:hover:not(:disabled){background:#ef4444;color:#fff}
+.btn-sm{padding:4px 8px;font-size:.75rem}
+.btn-block{width:100%}
+.profile-header-row{display:flex;gap:8px;align-items:center}
+.profile-desc-badge{font-size:.78rem;color:#94a3b8;background:#111122;padding:6px 10px;border-radius:6px;border:1px solid #222238;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.accordion-toggle{background:transparent;border:none;color:#818cf8;font-size:.78rem;font-weight:600;cursor:pointer;padding:2px 0}
+.accordion-toggle:hover{color:#a5b4fc}
+.accordion-content{display:flex;flex-direction:column;gap:10px;padding-top:8px;border-top:1px solid #232338}
+.accordion-content.hidden{display:none}
+.param-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+.param-field{display:flex;flex-direction:column;gap:3px}
+audio{width:100%;margin-top:4px}
+.output-list{display:flex;flex-direction:column;gap:6px;max-height:180px;overflow-y:auto}
+.output-item{display:flex;justify-content:space-between;align-items:center;padding:6px 10px;background:#111122;border-radius:6px;border:1px solid #222238;font-size:.8rem;gap:8px}
+.output-item .name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#cbd5e1}
+.output-actions{display:flex;gap:4px;flex-shrink:0}
+.hint{font-size:.75rem;color:#64748b;font-style:italic}
+.hidden{display:none!important}
+.badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:.7rem;font-weight:600;background:#27273f;color:#94a3b8;white-space:nowrap}
+.badge-green{background:#064e3b;color:#34d399}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="header">
+<div><h1>Chatterbox TTS</h1><div class="header-sub">Model Bahasa Indonesia (Grandhigh)</div></div>
+<div class="header-actions">
+<div style="display:flex;align-items:center;gap:6px"><label for="deviceSelect" style="margin:0;font-size:.7rem">Mode:</label><select id="deviceSelect" onchange="changeDevice()" style="padding:3px 6px;font-size:.75rem;width:auto;border-radius:4px"><option value="cuda">VGA (CUDA)</option><option value="cpu">CPU</option></select></div>
+<button class="btn btn-danger-outline btn-sm" onclick="closeApp()">Tutup App</button>
+</div>
+</div>
+<div id="statusBox" class="status loading"><span class="spinner"></span> Memuat model...</div>
+<div class="tabs">
+<button id="tabGenBtn" class="tab-btn active" onclick="switchTab('generate')">Generate Suara</button>
+<button id="tabCloneBtn" class="tab-btn" onclick="switchTab('clone')">Clone Suara</button>
+</div>
+<div id="tabGenerate">
+<div class="card">
+<div class="card-title"><span>Profil Suara</span><button class="btn btn-secondary btn-sm" onclick="addProfilePrompt()">+ Profil Baru</button></div>
+<div class="profile-header-row"><select id="profileSelect" onchange="onProfileChange()"></select><button id="btnPlayProfileVoice" class="btn btn-secondary btn-sm" onclick="playCurrentProfileVoice()" style="display:none">Play</button><button id="btnUploadProfileVoice" class="btn btn-secondary btn-sm" onclick="pickProfileVoice()">Pilih File</button><button id="btnDeleteProfile" class="btn btn-danger-outline btn-sm" onclick="deleteCurrentProfile()" style="display:none">Hapus</button></div>
+<div class="profile-desc-badge"><span id="profileDesc">Memuat profil...</span><span id="profileVoiceBadge" class="badge">bawaan</span></div>
+<div><button class="accordion-toggle" onclick="toggleAccordion('profileSettings')"><span id="accIcon">+</span> Pengaturan Profil dan Parameter</button>
+<div id="profileSettings" class="accordion-content hidden">
+<div style="display:flex;gap:8px"><div style="flex:1"><label>Nama</label><input type="text" id="pfName" placeholder="Nama"></div><div style="flex:2"><label>Deskripsi</label><input type="text" id="pfDesc" placeholder="Deskripsi karakter suara"></div></div>
+<label>Parameter TTS</label>
+<div class="param-grid">
+<div class="param-field"><label>Rep Pen</label><input type="number" id="pRep" step="0.1" value="1.2"></div>
+<div class="param-field"><label>Temp</label><input type="number" id="pTemp" step="0.1" value="0.8"></div>
+<div class="param-field"><label>Exag</label><input type="number" id="pExag" step="0.1" value="0.5"></div>
+<div class="param-field"><label>CFG</label><input type="number" id="pCfg" step="0.1" value="0.5"></div>
+<div class="param-field"><label>Top P</label><input type="number" id="pTop" step="0.05" value="1.0"></div>
+<div class="param-field"><label>Min P</label><input type="number" id="pMin" step="0.01" value="0.05"></div>
+</div>
+<div style="display:flex;justify-content:space-between"><button class="btn btn-secondary btn-sm" onclick="resetParams()">Reset Default</button><button class="btn btn-primary btn-sm" onclick="saveProfileDetails()">Simpan Profil</button></div>
+</div></div>
+</div>
+<div class="card" style="margin-top:14px">
+<div class="card-title">Teks yang Ingin Diucapkan</div>
+<textarea id="genTextInput" placeholder="Ketik kalimat Bahasa Indonesia di sini..."></textarea>
+<button id="btnGenerate" class="btn btn-primary btn-block" onclick="doGenerate()" disabled>Generate Suara</button>
+</div>
+</div>
+<div id="tabClone" class="hidden">
+<div class="card">
+<div class="card-title">File Suara Sumber (Base Clone)</div>
+<div class="hint">Pilih file audio wav/mp3/flac untuk dikloning. File disalin ke base_clone dan otomatis dihapus setelah output selesai.</div>
+<div style="display:flex;gap:8px;align-items:center;margin-top:4px"><button class="btn btn-secondary" onclick="pickCloneSource()">Pilih File Suara</button><button id="btnPlayCloneSource" class="btn btn-secondary btn-sm hidden" onclick="playCloneSource()">Dengar Sumber</button></div>
+<div id="cloneSourceName" class="hint">Belum ada file dipilih.</div>
+<div><button class="accordion-toggle" onclick="toggleAccordion('cloneSettings')"><span id="accIconClone">+</span> Pengaturan Parameter Clone</button>
+<div id="cloneSettings" class="accordion-content hidden">
+<div class="param-grid">
+<div class="param-field"><label>Rep Pen</label><input type="number" id="cRep" step="0.1" value="1.2"></div>
+<div class="param-field"><label>Temp</label><input type="number" id="cTemp" step="0.1" value="0.8"></div>
+<div class="param-field"><label>Exag</label><input type="number" id="cExag" step="0.1" value="0.5"></div>
+<div class="param-field"><label>CFG</label><input type="number" id="cCfg" step="0.1" value="0.5"></div>
+<div class="param-field"><label>Top P</label><input type="number" id="cTop" step="0.05" value="1.0"></div>
+<div class="param-field"><label>Min P</label><input type="number" id="cMin" step="0.01" value="0.05"></div>
+</div></div></div>
+</div>
+<div class="card" style="margin-top:14px">
+<div class="card-title">Teks untuk Suara Kloning</div>
+<textarea id="cloneTextInput" placeholder="Ketik teks untuk suara kloning..."></textarea>
+<button id="btnGenerateClone" class="btn btn-primary btn-block" onclick="doGenerateClone()" disabled>Kloning dan Generate Suara</button>
+</div>
+</div>
+<div id="progressBox" class="card hidden"><div class="status loading"><span class="spinner"></span> <span id="progressText">Memproses audio...</span></div></div>
+<div id="resultBox" class="card hidden"><div class="card-title"><span>Hasil Audio</span><span id="resultMeta" style="font-size:.75rem;color:#94a3b8"></span></div><audio id="audioPlayer" controls autoplay></audio></div>
+<div class="card"><div class="card-title"><span id="historyTitle">Riwayat Output (tts_outputs)</span><button class="btn btn-secondary btn-sm" onclick="openActiveFolder()">Buka Folder</button></div><div id="outputList" class="output-list"><div class="hint">Belum ada file.</div></div></div>
+</div>
+<script>
+var $ = function(id){ return document.getElementById(id); };
+var currentProfiles = [];
+var activeTab = 'generate';
+var activeCloneFile = null;
+function whenReady(fn){ if(window.pywebview && window.pywebview.api){ fn(); } else { window.addEventListener('pywebviewready', fn); } }
+function switchTab(tab){
+activeTab = tab;
+var isGen = (tab === 'generate');
+$('tabGenBtn').classList.toggle('active', isGen);
+$('tabCloneBtn').classList.toggle('active', !isGen);
+$('tabGenerate').classList.toggle('hidden', !isGen);
+$('tabClone').classList.toggle('hidden', isGen);
+$('historyTitle').textContent = isGen ? 'Riwayat Output (tts_outputs)' : 'Riwayat Output Clone (output_clone)';
+refreshOutputs(tab);
+}
+function toggleAccordion(id){
+var el = $(id);
+var isHidden = el.classList.contains('hidden');
+el.classList.toggle('hidden');
+var icon = (id === 'profileSettings') ? $('accIcon') : $('accIconClone');
+if(icon) icon.textContent = isHidden ? '-' : '+';
+}
+function checkStatus(){
+window.pywebview.api.get_status().then(function(s){
+var box = $('statusBox');
+if(s.loaded){
+box.className = 'status ok';
+box.textContent = 'Model Ready | Mode: ' + String(s.device).toUpperCase() + ' (' + s.gpu + ')';
+$('btnGenerate').disabled = false;
+if(activeCloneFile) $('btnGenerateClone').disabled = false;
+if(s.device) $('deviceSelect').value = s.device;
+} else {
+box.className = 'status loading';
+box.textContent = 'Memuat model Chatterbox...';
+setTimeout(checkStatus, 2500);
+}
+}).catch(function(e){
+$('statusBox').className = 'status error';
+$('statusBox').textContent = 'Error: ' + e.message;
+});
+}
+function changeDevice(){
+var dev = $('deviceSelect').value;
+var box = $('statusBox');
+box.className = 'status loading';
+box.textContent = 'Mengganti hardware ke ' + dev.toUpperCase() + '...';
+$('btnGenerate').disabled = true;
+$('btnGenerateClone').disabled = true;
+window.pywebview.api.set_device(dev).then(function(res){
+if(res.ok){
+box.className = 'status ok';
+box.textContent = 'Model Ready | Mode: ' + String(res.device).toUpperCase() + ' (' + res.gpu + ')';
+$('btnGenerate').disabled = false;
+if(activeCloneFile) $('btnGenerateClone').disabled = false;
+} else {
+box.className = 'status error';
+box.textContent = 'Gagal: ' + res.error;
+}
+}).catch(function(e){ box.className = 'status error'; box.textContent = 'Error: ' + e.message; });
+}
+function closeApp(){
+$('statusBox').className = 'status loading';
+$('statusBox').textContent = 'Menutup aplikasi...';
+window.pywebview.api.close_app().then(function(){}, function(){ window.close(); });
+}
+function loadProfiles(keepId){
+window.pywebview.api.get_profiles().then(function(list){
+currentProfiles = list;
+var sel = $('profileSelect');
+var prev = keepId || sel.value;
+sel.innerHTML = '';
+currentProfiles.forEach(function(p){
+var opt = document.createElement('option');
+opt.value = p.id;
+opt.textContent = p.name;
+sel.appendChild(opt);
+});
+if(prev){ for(var i=0;i<currentProfiles.length;i++){ if(currentProfiles[i].id === prev){ sel.value = prev; break; } } }
+onProfileChange();
+}).catch(function(e){ console.error('loadProfiles: ' + e.message); });
+}
+function currentProfile(){
+var pid = $('profileSelect').value;
+for(var i=0;i<currentProfiles.length;i++){ if(currentProfiles[i].id === pid) return currentProfiles[i]; }
+return null;
+}
+function onProfileChange(){
+var p = currentProfile();
+if(!p) return;
+var isDefault = (p.id === 'default');
+$('profileDesc').textContent = p.desc || (isDefault ? 'Suara bawaan Chatterbox' : 'Tanpa deskripsi');
+$('pfName').value = p.name || '';
+$('pfName').disabled = isDefault;
+$('pfDesc').value = p.desc || '';
+var badge = $('profileVoiceBadge');
+if(isDefault){
+badge.textContent = 'bawaan model'; badge.className = 'badge';
+$('btnPlayProfileVoice').style.display = 'none';
+$('btnUploadProfileVoice').style.display = 'none';
+$('btnDeleteProfile').style.display = 'none';
+} else if(p.has_voice){
+badge.textContent = 'punya suara'; badge.className = 'badge badge-green';
+$('btnPlayProfileVoice').style.display = 'inline-flex';
+$('btnUploadProfileVoice').style.display = 'inline-flex';
+$('btnDeleteProfile').style.display = 'inline-flex';
+} else {
+badge.textContent = 'belum ada suara'; badge.className = 'badge';
+$('btnPlayProfileVoice').style.display = 'none';
+$('btnUploadProfileVoice').style.display = 'inline-flex';
+$('btnDeleteProfile').style.display = 'inline-flex';
+}
+var q = p.params || {};
+$('pRep').value = (q.repetition_penalty !== undefined) ? q.repetition_penalty : 1.2;
+$('pTemp').value = (q.temperature !== undefined) ? q.temperature : 0.8;
+$('pExag').value = (q.exaggeration !== undefined) ? q.exaggeration : 0.5;
+$('pCfg').value = (q.cfg_weight !== undefined) ? q.cfg_weight : 0.5;
+$('pTop').value = (q.top_p !== undefined) ? q.top_p : 1.0;
+$('pMin').value = (q.min_p !== undefined) ? q.min_p : 0.05;
+}
+function addProfilePrompt(){
+var name = prompt('Nama Profil Suara Baru:');
+if(!name || !name.trim()) return;
+var desc = prompt('Deskripsi profil (opsional):', '') || '';
+window.pywebview.api.add_profile(name.trim(), desc).then(function(res){
+if(res.ok) loadProfiles(res.id);
+else alert('Gagal: ' + res.error);
+});
+}
+function pickProfileVoice(){
+var p = currentProfile();
+if(!p || p.id === 'default') return;
+window.pywebview.api.pick_audio_file().then(function(res){
+if(res.ok && res.path){
+window.pywebview.api.upload_voice(p.id, res.path).then(function(up){
+if(up.ok){ loadProfiles(p.id); alert('File suara profil tersimpan!'); }
+else alert('Gagal: ' + up.error);
+});
+}
+});
+}
+function playCurrentProfileVoice(){
+var p = currentProfile();
+if(!p) return;
+window.pywebview.api.get_profile_voice_url(p.id).then(function(res){
+if(res.ok){
+$('resultBox').classList.remove('hidden');
+$('resultMeta').textContent = 'Sampel: ' + p.name;
+$('audioPlayer').src = res.data_url;
+} else alert(res.error);
+});
+}
+function deleteCurrentProfile(){
+var p = currentProfile();
+if(!p || p.id === 'default') return;
+if(!confirm('Hapus profil "' + p.name + '" beserta file suaranya?')) return;
+window.pywebview.api.delete_profile(p.id).then(function(){ loadProfiles('default'); });
+}
+function saveProfileDetails(){
+var p = currentProfile();
+if(!p) return;
+var params = {
+repetition_penalty: parseFloat($('pRep').value) || 1.2,
+temperature: parseFloat($('pTemp').value) || 0.8,
+exaggeration: parseFloat($('pExag').value) || 0.5,
+cfg_weight: parseFloat($('pCfg').value) || 0.5,
+top_p: parseFloat($('pTop').value) || 1.0,
+min_p: parseFloat($('pMin').value) || 0.05
+};
+var nm = (p.id === 'default') ? p.name : ($('pfName').value.trim() || p.name);
+var ds = $('pfDesc').value.trim();
+window.pywebview.api.save_profile(p.id, nm, ds, params).then(function(res){
+if(res.ok){ loadProfiles(p.id); alert('Profil tersimpan!'); }
+else alert('Gagal: ' + res.error);
+});
+}
+function resetParams(){
+$('pRep').value = 1.2; $('pTemp').value = 0.8; $('pExag').value = 0.5;
+$('pCfg').value = 0.5; $('pTop').value = 1.0; $('pMin').value = 0.05;
+}
+function doGenerate(){
+var text = $('genTextInput').value.trim();
+if(!text){ alert('Teks belum diisi!'); return; }
+var p = currentProfile();
+var params = {
+repetition_penalty: parseFloat($('pRep').value) || 1.2,
+temperature: parseFloat($('pTemp').value) || 0.8,
+exaggeration: parseFloat($('pExag').value) || 0.5,
+cfg_weight: parseFloat($('pCfg').value) || 0.5,
+top_p: parseFloat($('pTop').value) || 1.0,
+min_p: parseFloat($('pMin').value) || 0.05
+};
+$('btnGenerate').disabled = true;
+$('progressBox').classList.remove('hidden');
+$('resultBox').classList.add('hidden');
+$('progressText').textContent = 'Generating dengan profil "' + (p ? p.name : 'Default') + '"...';
+window.pywebview.api.generate(text, p ? p.id : 'default', params).then(function(res){
+$('progressBox').classList.add('hidden');
+$('btnGenerate').disabled = false;
+if(res.ok){
+$('resultBox').classList.remove('hidden');
+$('resultMeta').textContent = res.filename + ' (' + res.size_kb + ' KB)';
+$('audioPlayer').src = res.data_url;
+refreshOutputs('generate');
+} else alert('Gagal: ' + res.error);
+}).catch(function(e){
+$('progressBox').classList.add('hidden');
+$('btnGenerate').disabled = false;
+alert('Error: ' + e.message);
+});
+}
+function pickCloneSource(){
+window.pywebview.api.pick_audio_file().then(function(res){
+if(res.ok && res.path){
+window.pywebview.api.set_clone_source(res.path).then(function(setRes){
+if(setRes.ok){
+activeCloneFile = setRes.name;
+$('cloneSourceName').textContent = 'File siap: ' + setRes.name;
+$('cloneSourceName').style.color = '#34d399';
+$('btnPlayCloneSource').classList.remove('hidden');
+$('btnGenerateClone').disabled = false;
+} else alert('Gagal copy file: ' + setRes.error);
+});
+}
+});
+}
+function playCloneSource(){
+window.pywebview.api.clone_source_url().then(function(res){
+if(res.ok){
+$('resultBox').classList.remove('hidden');
+$('resultMeta').textContent = 'Suara sumber clone';
+$('audioPlayer').src = res.data_url;
+} else alert(res.error);
+});
+}
+function doGenerateClone(){
+var text = $('cloneTextInput').value.trim();
+if(!text){ alert('Teks belum diisi!'); return; }
+var params = {
+repetition_penalty: parseFloat($('cRep').value) || 1.2,
+temperature: parseFloat($('cTemp').value) || 0.8,
+exaggeration: parseFloat($('cExag').value) || 0.5,
+cfg_weight: parseFloat($('cCfg').value) || 0.5,
+top_p: parseFloat($('cTop').value) || 1.0,
+min_p: parseFloat($('cMin').value) || 0.05
+};
+$('btnGenerateClone').disabled = true;
+$('progressBox').classList.remove('hidden');
+$('resultBox').classList.add('hidden');
+$('progressText').textContent = 'Kloning suara dan generating output...';
+window.pywebview.api.generate_clone(text, params).then(function(res){
+$('progressBox').classList.add('hidden');
+$('btnGenerateClone').disabled = false;
+activeCloneFile = null;
+$('cloneSourceName').textContent = 'File sumber sudah diproses dan dibersihkan.';
+$('cloneSourceName').style.color = '#94a3b8';
+$('btnPlayCloneSource').classList.add('hidden');
+if(res.ok){
+$('resultBox').classList.remove('hidden');
+$('resultMeta').textContent = 'Clone: ' + res.filename + ' (' + res.size_kb + ' KB)';
+$('audioPlayer').src = res.data_url;
+refreshOutputs('clone');
+} else alert('Gagal clone: ' + res.error);
+}).catch(function(e){
+$('progressBox').classList.add('hidden');
+$('btnGenerateClone').disabled = false;
+alert('Error: ' + e.message);
+});
+}
+function refreshOutputs(kind){
+var k = kind || activeTab;
+var promise = (k === 'clone') ? window.pywebview.api.list_clone_outputs() : window.pywebview.api.list_outputs();
+promise.then(function(files){
+var box = $('outputList');
+if(!files || !files.length){
+box.innerHTML = '<div class="hint">Belum ada output di folder ini.</div>';
+return;
+}
+var html = '';
+files.forEach(function(f){
+html += '<div class="output-item"><span class="name">' + f.name + ' (' + f.size_kb + ' KB)</span><div class="output-actions"><button class="btn btn-secondary btn-sm" data-path="' + f.path + '" onclick="playOutputFile(this.getAttribute(String.fromCharCode(100,97,116,97)-0 + \'-path\'))">Play</button></div></div>';
+});
+box.innerHTML = html;
+var btns = box.querySelectorAll('button');
+for(var i=0;i<btns.length;i++){
+(function(b){
+b.onclick = function(){
+var path = b.getAttribute('data-path');
+playOutputFile(path);
+};
+})(btns[i]);
+}
+}).catch(function(e){ console.error('refreshOutputs: ' + e.message); });
+}
+function playOutputFile(path){
+window.pywebview.api.get_audio_data_url(path).then(function(res){
+if(res.ok){
+$('resultBox').classList.remove('hidden');
+var parts = path.split('\\');
+var last = parts[parts.length-1].split('/').pop();
+$('resultMeta').textContent = last;
+$('audioPlayer').src = res.data_url;
+} else alert('Gagal memutar: ' + res.error);
+});
+}
+function openActiveFolder(){
+window.pywebview.api.open_folder(activeTab === 'clone' ? 'clone' : 'generate');
+}
+whenReady(function(){ checkStatus(); loadProfiles(); refreshOutputs('generate'); });
+</script>
+</body>
+</html>
