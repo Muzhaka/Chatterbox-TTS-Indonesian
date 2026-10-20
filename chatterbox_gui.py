@@ -14,16 +14,113 @@ import traceback
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 import soundfile as sf
 import webview
 
-from chatterbox.tts import ChatterboxTTS
+from chatterbox.tts import ChatterboxTTS, punc_norm
+from chatterbox.models.t3 import T3
+from chatterbox.models.t3.modules.cond_enc import T3Cond
+from chatterbox.models.s3tokenizer import drop_invalid_tokens
 from huggingface_hub import hf_hub_download
 from safetensors.torch import load_file
 
 # ── Config ──────────────────────────────────────
 MODEL_REPO = "grandhigh/Chatterbox-TTS-Indonesian"
 CHECKPOINT_FILE = "t3_cfg.safetensors"
+
+# Batas durasi output (detik). Library Chatterbox hardcode max_new_tokens=1000
+# yang menghasilkan ~40 detik. Speech token ≈ 25 token/detik (S3_SR=24000, stride=2).
+# 25 token/detik × 50 detik = 1250 token, kita beri headroom.
+DEFAULT_MAX_SECONDS = 300
+TOKENS_PER_SECOND = 25
+
+
+def seconds_to_max_tokens(seconds):
+    """Convert desired output duration (seconds) to speech-token budget."""
+    return max(1000, int(seconds * TOKENS_PER_SECOND))
+
+
+class ExtendedChatterbox(ChatterboxTTS):
+    """
+    ChatterboxTTS dengan batas durasi output yang bisa diatur.
+
+    Library asli (chatterbox/tts.py) hardcode `max_new_tokens=1000`, yang menghasilkan
+    audio ~40 detik lalu terpotong. Subclass ini membuka parameter tersebut.
+    """
+
+    def generate(
+        self,
+        text,
+        repetition_penalty=1.2,
+        min_p=0.05,
+        top_p=1.0,
+        audio_prompt_path=None,
+        exaggeration=0.5,
+        cfg_weight=0.5,
+        temperature=0.8,
+        max_seconds=None,
+    ):
+        if max_seconds is None:
+            max_seconds = DEFAULT_MAX_SECONDS
+        max_new_tokens = seconds_to_max_tokens(max_seconds)
+
+        if audio_prompt_path:
+            self.prepare_conditionals(audio_prompt_path, exaggeration=exaggeration)
+        else:
+            assert self.conds is not None, (
+                "Please `prepare_conditionals` first or specify `audio_prompt_path`"
+            )
+
+        # Update exaggeration if needed
+        if exaggeration != self.conds.t3.emotion_adv[0, 0, 0]:
+            _cond: T3Cond = self.conds.t3
+            self.conds.t3 = T3Cond(
+                speaker_emb=_cond.speaker_emb,
+                cond_prompt_speech_tokens=_cond.cond_prompt_speech_tokens,
+                emotion_adv=exaggeration * torch.ones(1, 1, 1),
+            ).to(device=self.device)
+
+        # Norm and tokenize text
+        text = punc_norm(text)
+        text_tokens = self.tokenizer.text_to_tokens(text).to(self.device)
+
+        if cfg_weight > 0.0:
+            text_tokens = torch.cat([text_tokens, text_tokens], dim=0)
+
+        sot = self.t3.hp.start_text_token
+        eot = self.t3.hp.stop_text_token
+        text_tokens = F.pad(text_tokens, (1, 0), value=sot)
+        text_tokens = F.pad(text_tokens, (0, 1), value=eot)
+
+        with torch.inference_mode():
+            speech_tokens = self.t3.inference(
+                t3_cond=self.conds.t3,
+                text_tokens=text_tokens,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                cfg_weight=cfg_weight,
+                repetition_penalty=repetition_penalty,
+                min_p=min_p,
+                top_p=top_p,
+            )
+            speech_tokens = speech_tokens[0]
+            speech_tokens = drop_invalid_tokens(speech_tokens)
+            speech_tokens = speech_tokens[speech_tokens < 6561]
+            speech_tokens = speech_tokens.to(self.device)
+
+            wav, _ = self.s3gen.inference(
+                speech_tokens=speech_tokens,
+                ref_dict=self.conds.gen,
+            )
+            wav = wav.squeeze(0).detach().cpu().numpy()
+            watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)
+
+        result = torch.from_numpy(watermarked_wav).unsqueeze(0)
+        duration_sec = round(len(watermarked_wav) / self.sr, 1)
+        result.duration_sec = duration_sec
+        result.hit_token_limit = duration_sec >= max_seconds - 3
+        return result
 
 APP_DIR = Path(__file__).parent
 PROFILE_MODEL_DIR = APP_DIR / "profile_model"
@@ -99,9 +196,11 @@ def load_model_safe(target_device=None):
         if target_device == "cuda" and not torch.cuda.is_available():
             target_device = "cpu"
         try:
-            m = ChatterboxTTS.from_pretrained(device=target_device)
+            m = ExtendedChatterbox.from_pretrained(device=target_device)
             ckpt_path = hf_hub_download(repo_id=MODEL_REPO, filename=CHECKPOINT_FILE)
             t3_state = load_file(ckpt_path, device="cpu")
+            if "model" in t3_state.keys():
+                t3_state = t3_state["model"][0]
             m.t3.load_state_dict(t3_state)
             if target_device == "cuda":
                 torch.cuda.empty_cache()
