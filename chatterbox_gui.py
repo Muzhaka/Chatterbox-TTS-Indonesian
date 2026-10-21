@@ -29,11 +29,175 @@ from safetensors.torch import load_file
 MODEL_REPO = "grandhigh/Chatterbox-TTS-Indonesian"
 CHECKPOINT_FILE = "t3_cfg.safetensors"
 
-# Batas durasi output (detik). Library Chatterbox hardcode max_new_tokens=1000
-# yang menghasilkan ~40 detik. Speech token ≈ 25 token/detik (S3_SR=24000, stride=2).
-# 25 token/detik × 50 detik = 1250 token, kita beri headroom.
-DEFAULT_MAX_SECONDS = 300
+# Batas aman per batch. Di bawah batas ini model tidak mengulang/mengomong racun.
+# 600 token ≈ 24 detik audio — jauh di bawah 1000 (batas default library yang "~40 detik"),
+# tapi sudah cukup untuk Continuity yang natural.
+BATCH_MAX_TOKENS = 600
 TOKENS_PER_SECOND = 25
+
+# Fallback conservative: teks pendek tetap generate normal (1 batch).
+DEFAULT_MAX_SECONDS = 300
+
+# Character estimation per word (rough) — model token text ~1.6 char/token Bahasa Indonesia
+CHARS_PER_TEXT_TOKEN = 2.4
+
+
+def estimate_text_tokens(text):
+    """Rough estimate: how many text tokens this string will become."""
+    return max(1, int(len(text.strip()) / CHARS_PER_TEXT_TOKEN))
+
+
+def split_text_for_batches(text, batch_max_tokens=BATCH_MAX_TOKENS):
+    """
+    Split long text into sequential batches safe for the model.
+
+    Strategy:
+      1. Split by sentence boundary (punc . ! ? ; newline) — keeps prosody natural.
+      2. Group sentences up to batch_max_tokens.
+      3. If a single sentence exceeds the limit, split by comma, then by word,
+         never mid-word (prevents consonant repetition artifacts).
+
+    Returns: List[str] — each <= batch_max_tokens (approx), ordered.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    # Quick path: short text, no batching needed.
+    if estimate_text_tokens(text) <= batch_max_tokens:
+        return [text]
+
+    # 1. Split by sentence-ending punctuation.
+    #    Keep the delimiter with the preceding chunk.
+    import re
+    sentences = re.split(r'(?<=[.!?;\n])\s+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if len(sentences) <= 1:
+        # Single giant "sentence" — fall through to word-level splitting.
+        sentences = [text]
+
+    # 2. Group by sentence into batches.
+    batches = []
+    current = []
+    current_tokens = 0
+
+    for sentence in sentences:
+        s_tokens = estimate_text_tokens(sentence)
+
+        if s_tokens <= batch_max_tokens:
+            # Fits — append to current batch if room, else flush.
+            if current_tokens + s_tokens <= batch_max_tokens:
+                current.append(sentence)
+                current_tokens += s_tokens
+            else:
+                if current:
+                    batches.append(" ".join(current))
+                current = [sentence]
+                current_tokens = s_tokens
+        else:
+            # Sentence too long — flush current, then split the long sentence by comma.
+            if current:
+                batches.append(" ".join(current))
+                current = []
+                current_tokens = 0
+            batches.extend(_split_long_sentence(sentence, batch_max_tokens))
+
+    # Flush trailing.
+    if current:
+        batches.append(" ".join(current))
+
+    return [b for b in batches if b.strip()]
+
+
+def _split_long_sentence(sentence, batch_max_tokens):
+    """
+    Split one oversized sentence into sub-batches.
+    Order: comma → semicolon → word boundary. Never mid-word.
+    """
+    import re
+
+    # Try comma
+    parts = re.split(r'(?<=,)\s+', sentence)
+    if len(parts) <= 1:
+        # No comma — split by word
+        return _split_by_words(sentence, batch_max_tokens)
+
+    batches = []
+    current = []
+    current_tokens = 0
+
+    for part in parts:
+        p_tokens = estimate_text_tokens(part)
+        if current_tokens + p_tokens <= batch_max_tokens:
+            current.append(part)
+            current_tokens += p_tokens
+        else:
+            if current:
+                batches.append(" ".join(current))
+            # This single part may still be too long — split by words.
+            if p_tokens > batch_max_tokens:
+                batches.extend(_split_by_words(part, batch_max_tokens))
+                current = []
+                current_tokens = 0
+            else:
+                current = [part]
+                current_tokens = p_tokens
+
+    if current:
+        batches.append(" ".join(current))
+
+    return batches
+
+
+def _split_by_words(text, batch_max_tokens):
+    """
+    Split by word boundaries — never mid-word.
+    Returns sub-batches <= batch_max_tokens (approx).
+    """
+    words = text.split()
+    batches = []
+    current = []
+    current_tokens = 0
+
+    for word in words:
+        w_tokens = estimate_text_tokens(word)
+        if current_tokens + w_tokens <= batch_max_tokens:
+            current.append(word)
+            current_tokens += w_tokens
+        else:
+            if current:
+                batches.append(" ".join(current))
+            current = [word]
+            current_tokens = w_tokens
+
+    if current:
+        batches.append(" ".join(current))
+
+    return batches
+
+
+def merge_wav_files(wav_paths, output_path, sample_rate):
+    """
+    Concatenate multiple wav files into one, inserting 150ms silence between them.
+    Prevents abrupt clicks/word-merging artifacts at batch boundaries.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
+    combined = []
+
+    for i, path in enumerate(wav_paths):
+        wav, sr = sf.read(path, dtype="float32")
+        if wav.ndim > 1:
+            wav = wav[:, 0]
+        combined.append(wav)
+        if i < len(wav_paths) - 1:
+            combined.append(silence)
+
+    merged = np.concatenate(combined)
+    sf.write(output_path, merged, sample_rate)
+    return merged
 
 
 def seconds_to_max_tokens(seconds):
@@ -473,6 +637,55 @@ class Api:
         return _data_url(files[0])
 
     # ── Generate ────────────────────────────────
+    def _run_batched_generation(self, text, gen_kwargs, out_file, label="batch"):
+        """
+        Generate audio in sequential batches for long text.
+
+        Splits text into safe chunks (~600 tokens each), generates each chunk
+        in order using the SAME voice reference, saves temp wavs, concatenates
+        with 150ms silence, then cleans up temp files.
+
+        Returns dict with {ok, batches, duration_sec, file}.
+        """
+        import tempfile
+        import shutil
+
+        batches = split_text_for_batches(text)
+        total = len(batches)
+        if total == 0:
+            return {"ok": False, "error": "Teks kosong setelah dipecah"}
+
+        tmp_dir = Path(tempfile.mkdtemp(prefix="tts_batch_"))
+        try:
+            tmp_files = []
+            for i, chunk in enumerate(batches, start=1):
+                print(f"[{label}] batch {i}/{total} ({estimate_text_tokens(chunk)} tok): "
+                      f"{chunk[:60]}{'...' if len(chunk) > 60 else ''}")
+
+                kwargs = dict(gen_kwargs)
+                kwargs["text"] = chunk
+                kwargs["max_seconds"] = DEFAULT_MAX_SECONDS
+
+                wav = model.generate(**kwargs)
+                wav_np = wav.squeeze().cpu().numpy()
+                chunk_path = tmp_dir / f"batch_{i:03d}.wav"
+                sf.write(str(chunk_path), wav_np, model.sr)
+                tmp_files.append(str(chunk_path))
+
+            # Concatenate all batches into the final output file.
+            merged = merge_wav_files(tmp_files, str(out_file), model.sr)
+            duration_sec = round(len(merged) / model.sr, 1)
+
+            return {
+                "ok": True,
+                "batches": total,
+                "duration_sec": duration_sec,
+                "file": str(out_file),
+            }
+        finally:
+            # Always clean up temp batch directory.
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
     def generate(self, text, profile_id=None, params=None):
         global is_generating
         if is_generating:
@@ -501,7 +714,6 @@ class Api:
             idx = len(list(TTS_OUTPUT_DIR.glob("*.wav"))) + 1
             out_file = TTS_OUTPUT_DIR / f"output_{idx:04d}.wav"
             gen_kwargs = {
-                "text": text.strip(),
                 "repetition_penalty": float(p_params.get("repetition_penalty", 1.2)),
                 "min_p": float(p_params.get("min_p", 0.05)),
                 "top_p": float(p_params.get("top_p", 1.0)),
@@ -512,9 +724,11 @@ class Api:
             if ref_path:
                 gen_kwargs["audio_prompt_path"] = ref_path
 
-            wav = model.generate(**gen_kwargs)
-            wav_np = wav.squeeze().cpu().numpy()
-            sf.write(str(out_file), wav_np, model.sr)
+            result = self._run_batched_generation(
+                text.strip(), gen_kwargs, out_file, label="generate"
+            )
+            if not result.get("ok"):
+                return result
 
             res = _data_url(out_file)
             if not res.get("ok"):
@@ -524,6 +738,8 @@ class Api:
                 "file": str(out_file),
                 "filename": out_file.name,
                 "size_kb": round(out_file.stat().st_size / 1024, 1),
+                "duration_sec": result.get("duration_sec"),
+                "batches": result.get("batches"),
                 "data_url": res["data_url"],
             }
         except Exception as e:
@@ -557,7 +773,6 @@ class Api:
             out_file = CLONE_OUTPUT_DIR / f"clone_{idx:04d}.wav"
 
             gen_kwargs = {
-                "text": text.strip(),
                 "audio_prompt_path": ref_path,
                 "repetition_penalty": float(p_params.get("repetition_penalty", 1.2)),
                 "min_p": float(p_params.get("min_p", 0.05)),
@@ -567,9 +782,11 @@ class Api:
                 "temperature": float(p_params.get("temperature", 0.8)),
             }
 
-            wav = model.generate(**gen_kwargs)
-            wav_np = wav.squeeze().cpu().numpy()
-            sf.write(str(out_file), wav_np, model.sr)
+            result = self._run_batched_generation(
+                text.strip(), gen_kwargs, out_file, label="clone"
+            )
+            if not result.get("ok"):
+                return result
 
             for f in files:
                 try:
@@ -585,6 +802,8 @@ class Api:
                 "file": str(out_file),
                 "filename": out_file.name,
                 "size_kb": round(out_file.stat().st_size / 1024, 1),
+                "duration_sec": result.get("duration_sec"),
+                "batches": result.get("batches"),
                 "data_url": res["data_url"],
             }
         except Exception as e:

@@ -10,6 +10,7 @@ Aplikasi desktop PyWebView ini memungkinkan:
 - **Clone Suara**: Voice cloning zero-shot dengan file audio referensi.
 - **Voice Profile**: Kelola profil suara pribadi (folder-based, file voice.wav per profil).
 - **Pilihan Perangkat Keras**: Dukung NVIDIA CUDA (GPU) dan CPU.
+- **Auto-Batching Teks Panjang**: Teks panjang dipotong otomatis per ~600 token berdasarkan tanda baca/kata, digenerate berurutan, lalu digabung rapi tanpa suara meracau/berulang.
 - **File Sumber Asli**: Semua model dan checkpoint disediakan oleh [grandhigh/Chatterbox-TTS-Indonesian](https://huggingface.co/grandhigh/Chatterbox-TTS-Indonesian) — file besar **tidak termasuk** di repo ini, tetapi diunduh otomatis saat pertama kali diperlukan.
 
 > **Catatan**: Project ini **dibuat sepenuhnya oleh AI** melalui *vibe coding*. Semua komponen — struktur proyek, backend Python (PyWebView), frontend HTML/JS, dan skrip peluncur — disusun dan diselesaikan oleh AI agent (Claude via Hermes Agent).
