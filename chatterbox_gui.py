@@ -29,11 +29,15 @@ from safetensors.torch import load_file
 MODEL_REPO = "grandhigh/Chatterbox-TTS-Indonesian"
 CHECKPOINT_FILE = "t3_cfg.safetensors"
 
-# Batas aman per batch. Di bawah batas ini model tidak mengulang/mengomong racun.
-# 600 token ≈ 24 detik audio — jauh di bawah 1000 (batas default library yang "~40 detik"),
-# tapi sudah cukup untuk Continuity yang natural.
-BATCH_MAX_TOKENS = 400
+# Batas aman per batch. T3 mulai degradasi (ngulang/meracau) lewat ~1000 speech
+# token ≈ 40 detik audio. Jadi tiap batch dibatasi jauh di bawah itu.
+# 160 text-token ≈ 385 karakter ≈ 26 detik ucapan Bahasa Indonesia.
+BATCH_MAX_TOKENS = 160
 TOKENS_PER_SECOND = 25
+
+# Hard ceiling audio per batch. Ini yang mencegah model lanjut ngelantur
+# setelah teks habis / masuk loop pengulangan.
+BATCH_MAX_SECONDS = 30
 
 # Fallback conservative: teks pendek tetap generate normal (1 batch).
 DEFAULT_MAX_SECONDS = 300
@@ -176,6 +180,62 @@ def _split_by_words(text, batch_max_tokens):
     return batches
 
 
+def _trim_trailing_silence(wav, sr, thresh=0.008, keep_ms=120):
+    """Buang ekor hening/desis di akhir audio. Return numpy array."""
+    import numpy as np
+
+    if wav is None or len(wav) == 0:
+        return wav
+    win = max(1, int(sr * 0.02))
+    n = len(wav)
+    idx = n
+    while idx > 0:
+        start = max(0, idx - win)
+        if float(np.abs(wav[start:idx]).max()) > thresh:
+            break
+        idx = start
+    keep = int(sr * keep_ms / 1000)
+    idx = min(n, idx + keep)
+    return wav[:idx] if idx > 0 else wav
+
+
+def _cut_repetition_loop(speech_tokens, min_repeats=12, max_period=24):
+    """
+    Deteksi loop pengulangan speech-token dan potong di awal loop.
+
+    Model autoregresif kadang masuk siklus: n-gram token yang sama diulang
+    terus sampai audio jadi "ngomong racun". Pengulangan identik >= min_repeats
+    kali berturut-turut tidak pernah terjadi di ucapan normal, jadi aman dipotong.
+    """
+    try:
+        toks = speech_tokens.tolist()
+    except Exception:
+        return speech_tokens
+
+    n = len(toks)
+    if n < min_repeats * 2:
+        return speech_tokens
+
+    best_cut = n
+    for period in range(1, max_period + 1):
+        run = 1
+        # jalan mundur dari ekor, cari run terpanjang
+        for i in range(n - period - 1, -1, -1):
+            if toks[i] == toks[i + period]:
+                run += 1
+                if run >= min_repeats and i < best_cut:
+                    best_cut = i + period  # mulai loop
+                    break
+            else:
+                run = 1
+        if best_cut < n:
+            break
+
+    if best_cut < n:
+        return speech_tokens[:best_cut]
+    return speech_tokens
+
+
 def merge_wav_files(wav_paths, output_path, sample_rate):
     """
     Concatenate multiple wav files into one, inserting 150ms silence between them.
@@ -202,7 +262,7 @@ def merge_wav_files(wav_paths, output_path, sample_rate):
 
 def seconds_to_max_tokens(seconds):
     """Convert desired output duration (seconds) to speech-token budget."""
-    return max(1000, int(seconds * TOKENS_PER_SECOND))
+    return max(100, int(seconds * TOKENS_PER_SECOND))
 
 
 class ExtendedChatterbox(ChatterboxTTS):
@@ -272,6 +332,7 @@ class ExtendedChatterbox(ChatterboxTTS):
             speech_tokens = speech_tokens[0]
             speech_tokens = drop_invalid_tokens(speech_tokens)
             speech_tokens = speech_tokens[speech_tokens < 6561]
+            speech_tokens = _cut_repetition_loop(speech_tokens)
             speech_tokens = speech_tokens.to(self.device)
 
             wav, _ = self.s3gen.inference(
@@ -684,26 +745,33 @@ class Api:
 
                 kwargs = dict(gen_kwargs)
                 kwargs["text"] = chunk
-                kwargs["max_seconds"] = DEFAULT_MAX_SECONDS
+                kwargs["max_seconds"] = BATCH_MAX_SECONDS
                 if rolling_ref:
                     kwargs["audio_prompt_path"] = rolling_ref
 
                 wav = model.generate(**kwargs)
                 wav_np = wav.squeeze().cpu().numpy()
+                wav_np = _trim_trailing_silence(wav_np, model.sr)
                 chunk_path = tmp_dir / f"batch_{i:03d}.wav"
                 sf.write(str(chunk_path), wav_np, model.sr)
                 tmp_files.append(str(chunk_path))
 
-                # Build rolling reference from the tail of this batch for the next one.
-                # Only do this when batching (total > 1) and there IS a next batch.
-                if i < total and len(wav_np) > 0:
-                    tail_sec = 2.0
-                    tail_samples = int(model.sr * tail_sec)
-                    tail = wav_np[-tail_samples:] if len(wav_np) > tail_samples else wav_np
-                    # Skip tail if it's basically silence (avoid a dead reference).
-                    if float(abs(tail).max()) > 1e-3:
+                # Build rolling reference from base_ref or clean middle chunk (not tail)
+                # Gunakan base_ref jika ada agar warna suara tidak bergeser/terdegradasi
+                if base_ref:
+                    rolling_ref = base_ref
+                elif i < total and len(wav_np) > 0:
+                    # Ambil 3.0 detik dari bagian TENGAH audio batch ini (bukan ekor yang berpotensi hening/racun)
+                    duration = len(wav_np) / model.sr
+                    if duration > 4.0:
+                        mid_start = int(model.sr * (duration / 2 - 1.5))
+                        mid_end = int(mid_start + model.sr * 3.0)
+                        sample_chunk = wav_np[mid_start:mid_end]
+                    else:
+                        sample_chunk = wav_np
+                    if float(abs(sample_chunk).max()) > 1e-3:
                         ref_path = tmp_dir / f"ref_{i:03d}.wav"
-                        sf.write(str(ref_path), tail, model.sr)
+                        sf.write(str(ref_path), sample_chunk, model.sr)
                         rolling_ref = str(ref_path)
 
             # Concatenate all batches into the final output file.
