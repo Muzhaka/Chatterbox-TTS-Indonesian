@@ -81,12 +81,13 @@ audio{width:100%;margin-top:4px}
 <div style="display:flex;gap:8px"><div style="flex:1"><label>Nama</label><input type="text" id="pfName" placeholder="Nama"></div><div style="flex:2"><label>Deskripsi</label><input type="text" id="pfDesc" placeholder="Deskripsi karakter suara"></div></div>
 <label>Parameter TTS</label>
 <div class="param-grid">
-<div class="param-field"><label>Rep Pen</label><input type="number" id="pRep" step="0.1" value="1.2"></div>
-<div class="param-field"><label>Temp</label><input type="number" id="pTemp" step="0.1" value="0.8"></div>
+<div class="param-field"><label>Rep Pen</label><input type="number" id="pRep" step="0.1" value="1.4"></div>
+<div class="param-field"><label>Temp</label><input type="number" id="pTemp" step="0.1" value="0.7"></div>
 <div class="param-field"><label>Exag</label><input type="number" id="pExag" step="0.1" value="0.5"></div>
 <div class="param-field"><label>CFG</label><input type="number" id="pCfg" step="0.1" value="0.5"></div>
-<div class="param-field"><label>Top P</label><input type="number" id="pTop" step="0.05" value="1.0"></div>
-<div class="param-field"><label>Min P</label><input type="number" id="pMin" step="0.01" value="0.05"></div>
+<div class="param-field"><label>Top P</label><input type="number" id="pTop" step="0.05" value="0.9"></div>
+<div class="param-field"><label>Min P</label><input type="number" id="pMin" step="0.01" value="0.08"></div>
+<div class="param-field"><label>Speed</label><input type="number" id="pSpeed" step="0.05" value="1.0" min="0.5" max="2.0"></div>
 </div>
 <div style="display:flex;justify-content:space-between"><button class="btn btn-secondary btn-sm" onclick="resetParams()">Reset Default</button><button class="btn btn-primary btn-sm" onclick="saveProfileDetails()">Simpan Profil</button></div>
 </div></div>
@@ -106,12 +107,13 @@ audio{width:100%;margin-top:4px}
 <div><button class="accordion-toggle" onclick="toggleAccordion('cloneSettings')"><span id="accIconClone">+</span> Pengaturan Parameter Clone</button>
 <div id="cloneSettings" class="accordion-content hidden">
 <div class="param-grid">
-<div class="param-field"><label>Rep Pen</label><input type="number" id="cRep" step="0.1" value="1.2"></div>
-<div class="param-field"><label>Temp</label><input type="number" id="cTemp" step="0.1" value="0.8"></div>
+<div class="param-field"><label>Rep Pen</label><input type="number" id="cRep" step="0.1" value="1.4"></div>
+<div class="param-field"><label>Temp</label><input type="number" id="cTemp" step="0.1" value="0.7"></div>
 <div class="param-field"><label>Exag</label><input type="number" id="cExag" step="0.1" value="0.5"></div>
 <div class="param-field"><label>CFG</label><input type="number" id="cCfg" step="0.1" value="0.5"></div>
-<div class="param-field"><label>Top P</label><input type="number" id="cTop" step="0.05" value="1.0"></div>
-<div class="param-field"><label>Min P</label><input type="number" id="cMin" step="0.01" value="0.05"></div>
+<div class="param-field"><label>Top P</label><input type="number" id="cTop" step="0.05" value="0.9"></div>
+<div class="param-field"><label>Min P</label><input type="number" id="cMin" step="0.01" value="0.08"></div>
+<div class="param-field"><label>Speed</label><input type="number" id="cSpeed" step="0.05" value="1.0" min="0.5" max="2.0"></div>
 </div></div></div>
 </div>
 <div class="card" style="margin-top:14px">
@@ -237,12 +239,13 @@ $('btnUploadProfileVoice').style.display = 'inline-flex';
 $('btnDeleteProfile').style.display = 'inline-flex';
 }
 var q = p.params || {};
-$('pRep').value = (q.repetition_penalty !== undefined) ? q.repetition_penalty : 1.2;
-$('pTemp').value = (q.temperature !== undefined) ? q.temperature : 0.8;
+$('pRep').value = (q.repetition_penalty !== undefined) ? q.repetition_penalty : 1.4;
+$('pTemp').value = (q.temperature !== undefined) ? q.temperature : 0.7;
 $('pExag').value = (q.exaggeration !== undefined) ? q.exaggeration : 0.5;
 $('pCfg').value = (q.cfg_weight !== undefined) ? q.cfg_weight : 0.5;
-$('pTop').value = (q.top_p !== undefined) ? q.top_p : 1.0;
-$('pMin').value = (q.min_p !== undefined) ? q.min_p : 0.05;
+$('pTop').value = (q.top_p !== undefined) ? q.top_p : 0.9;
+$('pMin').value = (q.min_p !== undefined) ? q.min_p : 0.08;
+$('pSpeed').value = (q.speed !== undefined) ? q.speed : 1.0;
 }
 function addProfilePrompt(){
 var name = prompt('Nama Profil Suara Baru:');
@@ -286,12 +289,13 @@ function saveProfileDetails(){
 var p = currentProfile();
 if(!p) return;
 var params = {
-repetition_penalty: parseFloat($('pRep').value) || 1.2,
-temperature: parseFloat($('pTemp').value) || 0.8,
+repetition_penalty: parseFloat($('pRep').value) || 1.4,
+temperature: parseFloat($('pTemp').value) || 0.7,
 exaggeration: parseFloat($('pExag').value) || 0.5,
 cfg_weight: parseFloat($('pCfg').value) || 0.5,
-top_p: parseFloat($('pTop').value) || 1.0,
-min_p: parseFloat($('pMin').value) || 0.05
+top_p: parseFloat($('pTop').value) || 0.9,
+min_p: parseFloat($('pMin').value) || 0.08,
+speed: parseFloat($('pSpeed').value) || 1.0
 };
 var nm = (p.id === 'default') ? p.name : ($('pfName').value.trim() || p.name);
 var ds = $('pfDesc').value.trim();
@@ -301,20 +305,22 @@ else alert('Gagal: ' + res.error);
 });
 }
 function resetParams(){
-$('pRep').value = 1.2; $('pTemp').value = 0.8; $('pExag').value = 0.5;
-$('pCfg').value = 0.5; $('pTop').value = 1.0; $('pMin').value = 0.05;
+$('pRep').value = 1.4; $('pTemp').value = 0.7; $('pExag').value = 0.5;
+$('pCfg').value = 0.5; $('pTop').value = 0.9; $('pMin').value = 0.08;
+$('pSpeed').value = 1.0;
 }
 function doGenerate(){
 var text = $('genTextInput').value.trim();
 if(!text){ alert('Teks belum diisi!'); return; }
 var p = currentProfile();
 var params = {
-repetition_penalty: parseFloat($('pRep').value) || 1.2,
-temperature: parseFloat($('pTemp').value) || 0.8,
+repetition_penalty: parseFloat($('pRep').value) || 1.4,
+temperature: parseFloat($('pTemp').value) || 0.7,
 exaggeration: parseFloat($('pExag').value) || 0.5,
 cfg_weight: parseFloat($('pCfg').value) || 0.5,
-top_p: parseFloat($('pTop').value) || 1.0,
-min_p: parseFloat($('pMin').value) || 0.05
+top_p: parseFloat($('pTop').value) || 0.9,
+min_p: parseFloat($('pMin').value) || 0.08,
+speed: parseFloat($('pSpeed').value) || 1.0
 };
 $('btnGenerate').disabled = true;
 $('progressBox').classList.remove('hidden');
@@ -363,12 +369,13 @@ function doGenerateClone(){
 var text = $('cloneTextInput').value.trim();
 if(!text){ alert('Teks belum diisi!'); return; }
 var params = {
-repetition_penalty: parseFloat($('cRep').value) || 1.2,
-temperature: parseFloat($('cTemp').value) || 0.8,
+repetition_penalty: parseFloat($('cRep').value) || 1.4,
+temperature: parseFloat($('cTemp').value) || 0.7,
 exaggeration: parseFloat($('cExag').value) || 0.5,
 cfg_weight: parseFloat($('cCfg').value) || 0.5,
-top_p: parseFloat($('cTop').value) || 1.0,
-min_p: parseFloat($('cMin').value) || 0.05
+top_p: parseFloat($('cTop').value) || 0.9,
+min_p: parseFloat($('cMin').value) || 0.08,
+speed: parseFloat($('cSpeed').value) || 1.0
 };
 $('btnGenerateClone').disabled = true;
 $('progressBox').classList.remove('hidden');

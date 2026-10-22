@@ -32,7 +32,7 @@ CHECKPOINT_FILE = "t3_cfg.safetensors"
 # Batas aman per batch. Di bawah batas ini model tidak mengulang/mengomong racun.
 # 600 token ≈ 24 detik audio — jauh di bawah 1000 (batas default library yang "~40 detik"),
 # tapi sudah cukup untuk Continuity yang natural.
-BATCH_MAX_TOKENS = 600
+BATCH_MAX_TOKENS = 400
 TOKENS_PER_SECOND = 25
 
 # Fallback conservative: teks pendek tetap generate normal (1 batch).
@@ -224,6 +224,7 @@ class ExtendedChatterbox(ChatterboxTTS):
         cfg_weight=0.5,
         temperature=0.8,
         max_seconds=None,
+        speed=1.0,
     ):
         if max_seconds is None:
             max_seconds = DEFAULT_MAX_SECONDS
@@ -281,7 +282,17 @@ class ExtendedChatterbox(ChatterboxTTS):
             watermarked_wav = self.watermarker.apply_watermark(wav, sample_rate=self.sr)
 
         result = torch.from_numpy(watermarked_wav).unsqueeze(0)
-        duration_sec = round(len(watermarked_wav) / self.sr, 1)
+
+        # Apply playback speed factor (pitch-preserving time stretch)
+        speed = float(speed or 1.0)
+        if speed != 1.0 and 0.5 <= speed <= 2.0:
+            import librosa
+            stretched = librosa.effects.time_stretch(watermarked_wav, rate=speed)
+            result = torch.from_numpy(stretched).unsqueeze(0)
+            duration_sec = round(len(stretched) / self.sr, 1)
+        else:
+            duration_sec = round(len(watermarked_wav) / self.sr, 1)
+
         result.duration_sec = duration_sec
         result.hit_token_limit = duration_sec >= max_seconds - 3
         return result
@@ -302,6 +313,7 @@ DEFAULT_PARAMS = {
     "exaggeration": 0.5,
     "cfg_weight": 0.5,
     "temperature": 0.7,
+    "speed": 1.0,
 }
 
 for d in (PROFILE_MODEL_DIR, BASE_CLONE_DIR, TTS_OUTPUT_DIR, CLONE_OUTPUT_DIR):
@@ -737,12 +749,13 @@ class Api:
             idx = len(list(TTS_OUTPUT_DIR.glob("*.wav"))) + 1
             out_file = TTS_OUTPUT_DIR / f"output_{idx:04d}.wav"
             gen_kwargs = {
-                "repetition_penalty": float(p_params.get("repetition_penalty", 1.2)),
-                "min_p": float(p_params.get("min_p", 0.05)),
-                "top_p": float(p_params.get("top_p", 1.0)),
-                "exaggeration": float(p_params.get("exaggeration", 0.5)),
-                "cfg_weight": float(p_params.get("cfg_weight", 0.5)),
-                "temperature": float(p_params.get("temperature", 0.8)),
+                "repetition_penalty": float(p_params.get("repetition_penalty", DEFAULT_PARAMS["repetition_penalty"])),
+                "min_p": float(p_params.get("min_p", DEFAULT_PARAMS["min_p"])),
+                "top_p": float(p_params.get("top_p", DEFAULT_PARAMS["top_p"])),
+                "exaggeration": float(p_params.get("exaggeration", DEFAULT_PARAMS["exaggeration"])),
+                "cfg_weight": float(p_params.get("cfg_weight", DEFAULT_PARAMS["cfg_weight"])),
+                "temperature": float(p_params.get("temperature", DEFAULT_PARAMS["temperature"])),
+                "speed": float(p_params.get("speed", DEFAULT_PARAMS["speed"])),
             }
             if ref_path:
                 gen_kwargs["audio_prompt_path"] = ref_path
@@ -797,12 +810,13 @@ class Api:
 
             gen_kwargs = {
                 "audio_prompt_path": ref_path,
-                "repetition_penalty": float(p_params.get("repetition_penalty", 1.2)),
-                "min_p": float(p_params.get("min_p", 0.05)),
-                "top_p": float(p_params.get("top_p", 1.0)),
-                "exaggeration": float(p_params.get("exaggeration", 0.5)),
-                "cfg_weight": float(p_params.get("cfg_weight", 0.5)),
-                "temperature": float(p_params.get("temperature", 0.8)),
+                "repetition_penalty": float(p_params.get("repetition_penalty", DEFAULT_PARAMS["repetition_penalty"])),
+                "min_p": float(p_params.get("min_p", DEFAULT_PARAMS["min_p"])),
+                "top_p": float(p_params.get("top_p", DEFAULT_PARAMS["top_p"])),
+                "exaggeration": float(p_params.get("exaggeration", DEFAULT_PARAMS["exaggeration"])),
+                "cfg_weight": float(p_params.get("cfg_weight", DEFAULT_PARAMS["cfg_weight"])),
+                "temperature": float(p_params.get("temperature", DEFAULT_PARAMS["temperature"])),
+                "speed": float(p_params.get("speed", DEFAULT_PARAMS["speed"])),
             }
 
             result = self._run_batched_generation(
