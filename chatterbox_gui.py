@@ -236,24 +236,79 @@ def _cut_repetition_loop(speech_tokens, min_repeats=12, max_period=24):
     return speech_tokens
 
 
-def merge_wav_files(wav_paths, output_path, sample_rate):
+# Jeda antar batch. Sebelumnya flat 150ms dan terasa terlalu kaku, apalagi
+# ditambah ekor hening yang sengaja disisakan _trim_trailing_silence.
+# Sekarang adaptif mengikuti tanda baca di ujung batch:
+#   titik/tanya/seru  -> 70ms  (jeda kalimat, masih terasa "nafas")
+#   koma/titik-koma   -> 40ms  (jeda klausa)
+#   tanpa tanda baca  -> 25ms  (potong di tengah kalimat, harus rapat)
+GAP_MS_SENTENCE = 70
+GAP_MS_CLAUSE = 40
+GAP_MS_INLINE = 25
+
+# Fade pendek di tepi tiap potongan. Wajib begitu jeda dipersempit, kalau tidak
+# sampel pertama/terakhir potongan bisa melompat dan terdengar "tik".
+EDGE_FADE_MS = 6
+
+
+def _apply_edge_fade(wav, sample_rate, fade_ms=EDGE_FADE_MS):
+    """Fade-in/out halus di kedua ujung potongan audio (anti-klik)."""
+    import numpy as np
+
+    n = int(sample_rate * fade_ms / 1000)
+    if n <= 1 or len(wav) < n * 2:
+        return wav
+    ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
+    out = wav.copy()
+    out[:n] *= ramp
+    out[-n:] *= ramp[::-1]
+    return out
+
+
+def gap_ms_for_text(text):
+    """Pilih panjang jeda setelah potongan teks ini berdasarkan tanda bacanya."""
+    t = (text or "").rstrip()
+    if not t:
+        return GAP_MS_INLINE
+    last = t[-1]
+    if last in ".!?":
+        return GAP_MS_SENTENCE
+    if last in ",;:":
+        return GAP_MS_CLAUSE
+    return GAP_MS_INLINE
+
+
+def merge_wav_files(wav_paths, output_path, sample_rate, gaps_ms=None, fade_ms=EDGE_FADE_MS):
     """
-    Concatenate multiple wav files into one, inserting 150ms silence between them.
-    Prevents abrupt clicks/word-merging artifacts at batch boundaries.
+    Concatenate wav files into one, inserting a short adaptive silence between them.
+
+    `gaps_ms` is a list, one entry per boundary (len == len(wav_paths) - 1).
+    Defaults to 70ms when not supplied. Edges get a 6ms fade so the narrowed
+    gaps do not introduce clicks.
     """
     import numpy as np
     import soundfile as sf
 
-    silence = np.zeros(int(sample_rate * 0.15), dtype=np.float32)
-    combined = []
+    if not wav_paths:
+        raise ValueError("wav_paths kosong")
 
+    n_gaps = max(0, len(wav_paths) - 1)
+    if gaps_ms is None:
+        gaps_ms = [GAP_MS_SENTENCE] * n_gaps
+    gaps_ms = list(gaps_ms)[:n_gaps]
+    while len(gaps_ms) < n_gaps:
+        gaps_ms.append(GAP_MS_SENTENCE)
+
+    combined = []
     for i, path in enumerate(wav_paths):
         wav, sr = sf.read(path, dtype="float32")
         if wav.ndim > 1:
             wav = wav[:, 0]
-        combined.append(wav)
-        if i < len(wav_paths) - 1:
-            combined.append(silence)
+        combined.append(_apply_edge_fade(wav, sample_rate, fade_ms))
+        if i < n_gaps:
+            gap = int(sample_rate * gaps_ms[i] / 1000)
+            if gap > 0:
+                combined.append(np.zeros(gap, dtype=np.float32))
 
     merged = np.concatenate(combined)
     sf.write(output_path, merged, sample_rate)
@@ -736,6 +791,7 @@ class Api:
         tmp_dir = Path(tempfile.mkdtemp(prefix="tts_batch_"))
         try:
             tmp_files = []
+            gap_list = []
             rolling_ref = base_ref
 
             for i, chunk in enumerate(batches, start=1):
@@ -755,6 +811,7 @@ class Api:
                 chunk_path = tmp_dir / f"batch_{i:03d}.wav"
                 sf.write(str(chunk_path), wav_np, model.sr)
                 tmp_files.append(str(chunk_path))
+                gap_list.append(gap_ms_for_text(chunk))
 
                 # Build rolling reference from base_ref or clean middle chunk (not tail)
                 # Gunakan base_ref jika ada agar warna suara tidak bergeser/terdegradasi
@@ -775,7 +832,8 @@ class Api:
                         rolling_ref = str(ref_path)
 
             # Concatenate all batches into the final output file.
-            merged = merge_wav_files(tmp_files, str(out_file), model.sr)
+            # gap_list has one entry per batch; merge uses entries [0 .. n-2].
+            merged = merge_wav_files(tmp_files, str(out_file), model.sr, gaps_ms=gap_list)
             duration_sec = round(len(merged) / model.sr, 1)
 
             return {
