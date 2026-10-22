@@ -296,12 +296,12 @@ VOICE_PROFILES_FILE = APP_DIR / "voice_profiles.json"
 AUDIO_EXTS = (".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac")
 
 DEFAULT_PARAMS = {
-    "repetition_penalty": 1.2,
-    "min_p": 0.05,
-    "top_p": 1.0,
+    "repetition_penalty": 1.4,
+    "min_p": 0.08,
+    "top_p": 0.9,
     "exaggeration": 0.5,
     "cfg_weight": 0.5,
-    "temperature": 0.8,
+    "temperature": 0.7,
 }
 
 for d in (PROFILE_MODEL_DIR, BASE_CLONE_DIR, TTS_OUTPUT_DIR, CLONE_OUTPUT_DIR):
@@ -639,11 +639,15 @@ class Api:
     # ── Generate ────────────────────────────────
     def _run_batched_generation(self, text, gen_kwargs, out_file, label="batch"):
         """
-        Generate audio in sequential batches for long text.
+        Generate audio in sequential batches for long text, WITH rolling audio
+        continuation to keep prosody and speaker identity continuous.
 
-        Splits text into safe chunks (~600 tokens each), generates each chunk
-        in order using the SAME voice reference, saves temp wavs, concatenates
-        with 150ms silence, then cleans up temp files.
+        Technique:
+          - Batch 1 uses the original reference audio (voice profile / clone src).
+          - For batch N (N>1), take the LAST ~2s of batch N-1's generated audio,
+            write it to a temp wav, and use it as `audio_prompt_path`.
+            The model then continues from how it sounded, not from a cold start,
+            which drastically reduces drifting intonation and repeated syllables.
 
         Returns dict with {ok, batches, duration_sec, file}.
         """
@@ -655,22 +659,40 @@ class Api:
         if total == 0:
             return {"ok": False, "error": "Teks kosong setelah dipecah"}
 
+        base_ref = gen_kwargs.pop("audio_prompt_path", None)
         tmp_dir = Path(tempfile.mkdtemp(prefix="tts_batch_"))
         try:
             tmp_files = []
+            rolling_ref = base_ref
+
             for i, chunk in enumerate(batches, start=1):
-                print(f"[{label}] batch {i}/{total} ({estimate_text_tokens(chunk)} tok): "
-                      f"{chunk[:60]}{'...' if len(chunk) > 60 else ''}")
+                print(f"[{label}] batch {i}/{total} ({estimate_text_tokens(chunk)} tok) "
+                      f"ref={'rolling' if (i > 1 and rolling_ref) else 'base'}: "
+                      f"{chunk[:50]}{'...' if len(chunk) > 50 else ''}")
 
                 kwargs = dict(gen_kwargs)
                 kwargs["text"] = chunk
                 kwargs["max_seconds"] = DEFAULT_MAX_SECONDS
+                if rolling_ref:
+                    kwargs["audio_prompt_path"] = rolling_ref
 
                 wav = model.generate(**kwargs)
                 wav_np = wav.squeeze().cpu().numpy()
                 chunk_path = tmp_dir / f"batch_{i:03d}.wav"
                 sf.write(str(chunk_path), wav_np, model.sr)
                 tmp_files.append(str(chunk_path))
+
+                # Build rolling reference from the tail of this batch for the next one.
+                # Only do this when batching (total > 1) and there IS a next batch.
+                if i < total and len(wav_np) > 0:
+                    tail_sec = 2.0
+                    tail_samples = int(model.sr * tail_sec)
+                    tail = wav_np[-tail_samples:] if len(wav_np) > tail_samples else wav_np
+                    # Skip tail if it's basically silence (avoid a dead reference).
+                    if float(abs(tail).max()) > 1e-3:
+                        ref_path = tmp_dir / f"ref_{i:03d}.wav"
+                        sf.write(str(ref_path), tail, model.sr)
+                        rolling_ref = str(ref_path)
 
             # Concatenate all batches into the final output file.
             merged = merge_wav_files(tmp_files, str(out_file), model.sr)
@@ -681,6 +703,7 @@ class Api:
                 "batches": total,
                 "duration_sec": duration_sec,
                 "file": str(out_file),
+                "continuity": "rolling" if total > 1 else "single",
             }
         finally:
             # Always clean up temp batch directory.
